@@ -174,7 +174,7 @@ void SmxFrame::readOutlineGraphics()
 std::vector<SmpPixel> SmxFrame::decode4Plus1(const std::vector<uint8_t> &data)
 {
     std::vector<SmpPixel> pixelsVector(data.size() / 1.25);
-    SmpPixel *pixels = pixelsVector.data();
+    SmpPixel *target = pixelsVector.data();
 
     const uint8_t *source = data.data();
 
@@ -188,12 +188,11 @@ std::vector<SmpPixel> SmxFrame::decode4Plus1(const std::vector<uint8_t> &data)
     p3.damageMask = 0;
     p3.damageMask2 = 0;
 
-    size_t pixelsPos = 0;
     for (size_t i=0; i<data.size(); i += 5) {
-        p0.index = uint32_t(source[i + 0]);
-        p1.index = uint32_t(source[i + 1]);
-        p2.index = uint32_t(source[i + 2]);
-        p3.index = uint32_t(source[i + 3]);
+        p0.index = source[i + 0];
+        p1.index = source[i + 1];
+        p2.index = source[i + 2];
+        p3.index = source[i + 3];
 
         const uint8_t sections = source[i + 4];
         p0.section = (sections >> 0) & 0b11;
@@ -201,10 +200,11 @@ std::vector<SmpPixel> SmxFrame::decode4Plus1(const std::vector<uint8_t> &data)
         p2.section = (sections >> 4) & 0b11;
         p3.section = (sections >> 6) & 0b11;
 
-        pixels[pixelsPos++] = p0;
-        pixels[pixelsPos++] = p1;
-        pixels[pixelsPos++] = p2;
-        pixels[pixelsPos++] = p3;
+        // todo: p0,p1,p2,p3 into an array, memcpy them en masse, maybe that is faster lolidk
+        *target++ = p0;
+        *target++ = p1;
+        *target++ = p2;
+        *target++ = p3;
     }
 
     return pixelsVector;
