@@ -664,377 +664,378 @@ DXGI_FORMAT ResourceFormat2DXGIFormat(ResourceFormat format)
   return DXGI_FORMAT_UNKNOWN;
 }
 
-bool DdsFile::write_dds_to_file(FILE *f)
+bool DdsFile::write_dds_to_file()
 {
-  if(!f)
-    return false;
+    uint32_t magic = dds_fourcc;
+    DDS_HEADER header{};
+    DDS_HEADER_DXT10 headerDXT10{};
 
-  uint32_t magic = dds_fourcc;
-  DDS_HEADER header{};
-  DDS_HEADER_DXT10 headerDXT10{};
+    header.dwSize = sizeof(DDS_HEADER);
 
-  header.dwSize = sizeof(DDS_HEADER);
+    header.ddspf.dwSize = sizeof(DDS_PIXELFORMAT);
 
-  header.ddspf.dwSize = sizeof(DDS_PIXELFORMAT);
+    header.dwWidth = this->width;
+    header.dwHeight = this->height;
+    header.dwDepth = this->depth;
+    header.dwMipMapCount = this->mips;
 
-  header.dwWidth = this->width;
-  header.dwHeight = this->height;
-  header.dwDepth = this->depth;
-  header.dwMipMapCount = this->mips;
+    header.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+    if(this->mips > 1)
+        header.dwFlags |= DDSD_MIPMAPCOUNT;
+    if(this->depth > 1)
+        header.dwFlags |= DDSD_DEPTH;
 
-  header.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
-  if(this->mips > 1)
-    header.dwFlags |= DDSD_MIPMAPCOUNT;
-  if(this->depth > 1)
-    header.dwFlags |= DDSD_DEPTH;
+    bool blockFormat = false;
 
-  bool blockFormat = false;
-
-  if(this->format.Special())
-  {
-    switch(this->format.type)
+    if(this->format.Special())
     {
-      case ResourceFormatType::BC1:
-      case ResourceFormatType::BC2:
-      case ResourceFormatType::BC3:
-      case ResourceFormatType::BC4:
-      case ResourceFormatType::BC5:
-      case ResourceFormatType::BC6:
-      case ResourceFormatType::BC7: blockFormat = true; break;
-      case ResourceFormatType::ETC2:
-      case ResourceFormatType::EAC:
-      case ResourceFormatType::ASTC:
-      case ResourceFormatType::YUV8:
-      case ResourceFormatType::YUV10:
-      case ResourceFormatType::YUV12:
-      case ResourceFormatType::YUV16:
-        fprintf(stderr, "Unsupported file format, %u", this->format.type);
-        return false;
-      default: break;
-    }
-  }
-
-  if(blockFormat)
-    header.dwFlags |= DDSD_LINEARSIZE;
-  else
-    header.dwFlags |= DDSD_PITCH;
-
-  header.dwCaps = DDSCAPS_TEXTURE;
-  if(this->mips > 1)
-    header.dwCaps |= DDSCAPS_MIPMAP;
-  if(this->mips > 1 || this->slices > 1 || this->depth > 1)
-    header.dwCaps |= DDSCAPS_COMPLEX;
-
-  header.dwCaps2 = this->depth > 1 ? DDSCAPS2_VOLUME : 0;
-
-  bool dx10Header = false;
-
-  headerDXT10.dxgiFormat = ResourceFormat2DXGIFormat(this->format);
-  headerDXT10.resourceDimension =
-      this->depth > 1 ? D3D10_RESOURCE_DIMENSION_TEXTURE3D : D3D10_RESOURCE_DIMENSION_TEXTURE2D;
-  headerDXT10.miscFlag = 0;
-  headerDXT10.arraySize = this->slices;
-
-  if(headerDXT10.dxgiFormat == DXGI_FORMAT_UNKNOWN)
-  {
-    fprintf(stderr, "Couldn't convert resource format to DXGI format");
-    return false;
-  }
-
-  if(this->cubemap)
-  {
-    header.dwCaps2 = DDSCAPS2_CUBEMAP | DDSCAPS2_CUBEMAP_ALLFACES;
-    headerDXT10.miscFlag |= DDS_RESOURCE_MISC_TEXTURECUBE;
-    headerDXT10.arraySize /= 6;
-  }
-
-  if(headerDXT10.arraySize > 1)
-    dx10Header = true;    // need to specify dx10 header to give array size
-
-  uint32_t bytesPerPixel = 1;
-
-  if(blockFormat)
-  {
-    int blockSize =
-        (this->format.type == ResourceFormatType::BC1 || this->format.type == ResourceFormatType::BC4)
-            ? 8
-            : 16;
-    header.dwPitchOrLinearSize = std::max(1U, ((header.dwWidth + 3) / 4)) * blockSize;
-  }
-  else
-  {
-    switch(this->format.type)
-    {
-      case ResourceFormatType::S8:
-      case ResourceFormatType::A8: bytesPerPixel = 1; break;
-      case ResourceFormatType::R10G10B10A2:
-      case ResourceFormatType::R9G9B9E5:
-      case ResourceFormatType::R11G11B10:
-      case ResourceFormatType::D24S8: bytesPerPixel = 4; break;
-      case ResourceFormatType::R5G6B5:
-      case ResourceFormatType::R5G5B5A1:
-      case ResourceFormatType::R4G4B4A4: bytesPerPixel = 2; break;
-      case ResourceFormatType::D32S8: bytesPerPixel = 8; break;
-      case ResourceFormatType::D16S8:
-      case ResourceFormatType::YUV8:
-      case ResourceFormatType::YUV10:
-      case ResourceFormatType::YUV12:
-      case ResourceFormatType::YUV16:
-      case ResourceFormatType::R4G4:
-        fprintf(stderr, "Unsupported file format %u", this->format.type);
-        return false;
-      default: bytesPerPixel = this->format.compCount * this->format.compByteWidth;
-    }
-
-    header.dwPitchOrLinearSize = header.dwWidth * bytesPerPixel;
-  }
-
-  // special case a couple of formats to write out non-DX10 style, for
-  // backwards compatibility
-  if(this->format.compByteWidth == 1 && this->format.compCount == 4 &&
-     this->format.type == ResourceFormatType::Regular &&
-     (this->format.compType == CompType::UNorm || this->format.compType == CompType::UNormSRGB))
-  {
-    header.ddspf.dwFlags = DDPF_RGBA;
-    header.ddspf.dwRGBBitCount = 32;
-    header.ddspf.dwRBitMask = 0x000000ff;
-    header.ddspf.dwGBitMask = 0x0000ff00;
-    header.ddspf.dwBBitMask = 0x00ff0000;
-    header.ddspf.dwABitMask = 0xff000000;
-
-    if(this->format.BGRAOrder())
-      std::swap(header.ddspf.dwRBitMask, header.ddspf.dwBBitMask);
-  }
-  else if(this->format.type == ResourceFormatType::BC1)
-  {
-    header.ddspf.dwFlags = DDPF_FOURCC;
-    header.ddspf.dwFourCC = MAKE_FOURCC('D', 'X', 'T', '1');
-  }
-  else if(this->format.type == ResourceFormatType::BC2)
-  {
-    header.ddspf.dwFlags = DDPF_FOURCC;
-    header.ddspf.dwFourCC = MAKE_FOURCC('D', 'X', 'T', '3');
-  }
-  else if(this->format.type == ResourceFormatType::BC3)
-  {
-    header.ddspf.dwFlags = DDPF_FOURCC;
-    header.ddspf.dwFourCC = MAKE_FOURCC('D', 'X', 'T', '5');
-  }
-  else if(this->format.type == ResourceFormatType::BC4 && this->format.compType == CompType::UNorm)
-  {
-    header.ddspf.dwFlags = DDPF_FOURCC;
-    header.ddspf.dwFourCC = MAKE_FOURCC('B', 'C', '4', 'U');
-  }
-  else if(this->format.type == ResourceFormatType::BC4 && this->format.compType == CompType::SNorm)
-  {
-    header.ddspf.dwFlags = DDPF_FOURCC;
-    header.ddspf.dwFourCC = MAKE_FOURCC('B', 'C', '4', 'S');
-  }
-  else if(this->format.type == ResourceFormatType::BC5 && this->format.compType == CompType::UNorm)
-  {
-    header.ddspf.dwFlags = DDPF_FOURCC;
-    header.ddspf.dwFourCC = MAKE_FOURCC('A', 'T', 'I', '2');
-  }
-  else if(this->format.type == ResourceFormatType::BC5 && this->format.compType == CompType::SNorm)
-  {
-    header.ddspf.dwFlags = DDPF_FOURCC;
-    header.ddspf.dwFourCC = MAKE_FOURCC('B', 'C', '5', 'S');
-  }
-  else
-  {
-    // just write out DX10 header
-    dx10Header = true;
-  }
-
-  if(dx10Header)
-  {
-    header.ddspf.dwFlags = DDPF_FOURCC;
-    header.ddspf.dwFourCC = MAKE_FOURCC('D', 'X', '1', '0');
-  }
-
-  {
-    fwrite(&magic, sizeof(magic), 1, f);
-    fwrite(&header, sizeof(header), 1, f);
-    if(dx10Header)
-      fwrite(&headerDXT10, sizeof(headerDXT10), 1, f);
-
-    int i = 0;
-    for(int slice = 0; slice < std::max(1, this->slices); slice++)
-    {
-      for(int mip = 0; mip < std::max(1, this->mips); mip++)
-      {
-        int numdepths = std::max(1, this->depth >> mip);
-        for(int d = 0; d < numdepths; d++)
+        switch(this->format.type)
         {
-          uint8_t *bytedata = this->subdata[i];
+        case ResourceFormatType::BC1:
+        case ResourceFormatType::BC2:
+        case ResourceFormatType::BC3:
+        case ResourceFormatType::BC4:
+        case ResourceFormatType::BC5:
+        case ResourceFormatType::BC6:
+        case ResourceFormatType::BC7: blockFormat = true; break;
+        case ResourceFormatType::ETC2:
+        case ResourceFormatType::EAC:
+        case ResourceFormatType::ASTC:
+        case ResourceFormatType::YUV8:
+        case ResourceFormatType::YUV10:
+        case ResourceFormatType::YUV12:
+        case ResourceFormatType::YUV16:
+            log.error("Unsupported file format, %", this->format.type);
+            return false;
+        default: break;
+        }
+    }
 
-          int rowlen = std::max(1, this->width >> mip);
-          int numRows = std::max(1, this->height >> mip);
-          int pitch = std::max(1U, rowlen * bytesPerPixel);
+    if(blockFormat)
+        header.dwFlags |= DDSD_LINEARSIZE;
+    else
+        header.dwFlags |= DDSD_PITCH;
 
-          // pitch/rows are in blocks, not pixels, for block formats.
-          if(blockFormat)
-          {
-            numRows = std::max(1, numRows / 4);
+    header.dwCaps = DDSCAPS_TEXTURE;
+    if(this->mips > 1)
+        header.dwCaps |= DDSCAPS_MIPMAP;
+    if(this->mips > 1 || this->slices > 1 || this->depth > 1)
+        header.dwCaps |= DDSCAPS_COMPLEX;
 
-            int blockSize = (this->format.type == ResourceFormatType::BC1 ||
-                             this->format.type == ResourceFormatType::BC4)
+    header.dwCaps2 = this->depth > 1 ? DDSCAPS2_VOLUME : 0;
+
+    bool dx10Header = false;
+
+    headerDXT10.dxgiFormat = ResourceFormat2DXGIFormat(this->format);
+    headerDXT10.resourceDimension =
+            this->depth > 1 ? D3D10_RESOURCE_DIMENSION_TEXTURE3D : D3D10_RESOURCE_DIMENSION_TEXTURE2D;
+    headerDXT10.miscFlag = 0;
+    headerDXT10.arraySize = this->slices;
+
+    if(headerDXT10.dxgiFormat == DXGI_FORMAT_UNKNOWN)
+    {
+        fprintf(stderr, "Couldn't convert resource format to DXGI format");
+        return false;
+    }
+
+    if(this->cubemap)
+    {
+        header.dwCaps2 = DDSCAPS2_CUBEMAP | DDSCAPS2_CUBEMAP_ALLFACES;
+        headerDXT10.miscFlag |= DDS_RESOURCE_MISC_TEXTURECUBE;
+        headerDXT10.arraySize /= 6;
+    }
+
+    if(headerDXT10.arraySize > 1)
+        dx10Header = true;    // need to specify dx10 header to give array size
+
+    uint32_t bytesPerPixel = 1;
+
+    if(blockFormat)
+    {
+        int blockSize =
+                (this->format.type == ResourceFormatType::BC1 || this->format.type == ResourceFormatType::BC4)
+                ? 8
+                : 16;
+        header.dwPitchOrLinearSize = std::max(1U, ((header.dwWidth + 3) / 4)) * blockSize;
+    }
+    else
+    {
+        switch(this->format.type)
+        {
+        case ResourceFormatType::S8:
+        case ResourceFormatType::A8: bytesPerPixel = 1; break;
+        case ResourceFormatType::R10G10B10A2:
+        case ResourceFormatType::R9G9B9E5:
+        case ResourceFormatType::R11G11B10:
+        case ResourceFormatType::D24S8: bytesPerPixel = 4; break;
+        case ResourceFormatType::R5G6B5:
+        case ResourceFormatType::R5G5B5A1:
+        case ResourceFormatType::R4G4B4A4: bytesPerPixel = 2; break;
+        case ResourceFormatType::D32S8: bytesPerPixel = 8; break;
+        case ResourceFormatType::D16S8:
+        case ResourceFormatType::YUV8:
+        case ResourceFormatType::YUV10:
+        case ResourceFormatType::YUV12:
+        case ResourceFormatType::YUV16:
+        case ResourceFormatType::R4G4:
+            log.error("Unsupported file format %", this->format.type);
+            return false;
+        default: bytesPerPixel = this->format.compCount * this->format.compByteWidth;
+        }
+
+        header.dwPitchOrLinearSize = header.dwWidth * bytesPerPixel;
+    }
+
+    // special case a couple of formats to write out non-DX10 style, for
+    // backwards compatibility
+    if(this->format.compByteWidth == 1 && this->format.compCount == 4 &&
+            this->format.type == ResourceFormatType::Regular &&
+            (this->format.compType == CompType::UNorm || this->format.compType == CompType::UNormSRGB))
+    {
+        header.ddspf.dwFlags = DDPF_RGBA;
+        header.ddspf.dwRGBBitCount = 32;
+        header.ddspf.dwRBitMask = 0x000000ff;
+        header.ddspf.dwGBitMask = 0x0000ff00;
+        header.ddspf.dwBBitMask = 0x00ff0000;
+        header.ddspf.dwABitMask = 0xff000000;
+
+        if(this->format.BGRAOrder())
+            std::swap(header.ddspf.dwRBitMask, header.ddspf.dwBBitMask);
+    }
+    else if(this->format.type == ResourceFormatType::BC1)
+    {
+        header.ddspf.dwFlags = DDPF_FOURCC;
+        header.ddspf.dwFourCC = MAKE_FOURCC('D', 'X', 'T', '1');
+    }
+    else if(this->format.type == ResourceFormatType::BC2)
+    {
+        header.ddspf.dwFlags = DDPF_FOURCC;
+        header.ddspf.dwFourCC = MAKE_FOURCC('D', 'X', 'T', '3');
+    }
+    else if(this->format.type == ResourceFormatType::BC3)
+    {
+        header.ddspf.dwFlags = DDPF_FOURCC;
+        header.ddspf.dwFourCC = MAKE_FOURCC('D', 'X', 'T', '5');
+    }
+    else if(this->format.type == ResourceFormatType::BC4 && this->format.compType == CompType::UNorm)
+    {
+        header.ddspf.dwFlags = DDPF_FOURCC;
+        header.ddspf.dwFourCC = MAKE_FOURCC('B', 'C', '4', 'U');
+    }
+    else if(this->format.type == ResourceFormatType::BC4 && this->format.compType == CompType::SNorm)
+    {
+        header.ddspf.dwFlags = DDPF_FOURCC;
+        header.ddspf.dwFourCC = MAKE_FOURCC('B', 'C', '4', 'S');
+    }
+    else if(this->format.type == ResourceFormatType::BC5 && this->format.compType == CompType::UNorm)
+    {
+        header.ddspf.dwFlags = DDPF_FOURCC;
+        header.ddspf.dwFourCC = MAKE_FOURCC('A', 'T', 'I', '2');
+    }
+    else if(this->format.type == ResourceFormatType::BC5 && this->format.compType == CompType::SNorm)
+    {
+        header.ddspf.dwFlags = DDPF_FOURCC;
+        header.ddspf.dwFourCC = MAKE_FOURCC('B', 'C', '5', 'S');
+    }
+    else
+    {
+        // just write out DX10 header
+        dx10Header = true;
+    }
+
+    if(dx10Header)
+    {
+        header.ddspf.dwFlags = DDPF_FOURCC;
+        header.ddspf.dwFourCC = MAKE_FOURCC('D', 'X', '1', '0');
+    }
+
+    {
+        serialize(magic);
+        serialize(header);
+        if(dx10Header) {
+            serialize(headerDXT10);
+        }
+
+        int i = 0;
+        for(int slice = 0; slice < std::max(1, this->slices); slice++)
+        {
+            for(int mip = 0; mip < std::max(1, this->mips); mip++)
+            {
+                int numdepths = std::max(1, this->depth >> mip);
+                for(int d = 0; d < numdepths; d++)
+                {
+                    char *bytedata = this->subdata[i];
+
+                    int rowlen = std::max(1, this->width >> mip);
+                    int numRows = std::max(1, this->height >> mip);
+                    int pitch = std::max(1U, rowlen * bytesPerPixel);
+
+                    // pitch/rows are in blocks, not pixels, for block formats.
+                    if(blockFormat)
+                    {
+                        numRows = std::max(1, numRows / 4);
+
+                        int blockSize = (this->format.type == ResourceFormatType::BC1 ||
+                                         this->format.type == ResourceFormatType::BC4)
                                 ? 8
                                 : 16;
 
-            pitch = std::max(blockSize, (((rowlen + 3) / 4)) * blockSize);
-          }
+                        pitch = std::max(blockSize, (((rowlen + 3) / 4)) * blockSize);
+                    }
 
-          for(int row = 0; row < numRows; row++)
-          {
-            fwrite(bytedata, 1, pitch, f);
+                    for(int row = 0; row < numRows; row++)
+                    {
+                        getOStream()->write(bytedata, pitch);
 
-            bytedata += pitch;
-          }
+                        bytedata += pitch;
+                    }
 
-          i++;
+                    i++;
+                }
+            }
         }
-      }
     }
-  }
 
-  return true;
+    return true;
 }
 
-bool DdsFile::is_dds_file(FILE *f)
+void DdsFile::serializeObject()
 {
-  fseek(f, 0, SEEK_SET);
-
-  uint32_t magic = 0;
-  fread(&magic, sizeof(magic), 1, f);
-
-  fseek(f, 0, SEEK_SET);
-
-  return magic == dds_fourcc;
+    switch (getOperation()) {
+    case OP_READ:
+        load_dds_from_file();
+        break;
+    case OP_WRITE:
+        write_dds_to_file();
+    case OP_CALC_SIZE:
+        throw std::runtime_error("not implemented");
+        break;
+    default:
+        throw std::runtime_error("Invalid operation");
+        break;
+    }
 }
 
-bool DdsFile::load_dds_from_file(FILE *f)
+bool DdsFile::load_dds_from_file()
 {
-  fseek(f, 0, SEEK_SET);
+//    fseek(file, 0, SEEK_SET);
 
-  uint32_t magic = 0;
-  fread(&magic, sizeof(magic), 1, f);
-
-  DDS_HEADER header = {};
-  fread(&header, sizeof(header), 1, f);
-
-  bool dx10Header = false;
-  DDS_HEADER_DXT10 headerDXT10 = {};
-
-  if(header.ddspf.dwFlags == DDPF_FOURCC && header.ddspf.dwFourCC == MAKE_FOURCC('D', 'X', '1', '0'))
-  {
-    fread(&headerDXT10, sizeof(headerDXT10), 1, f);
-    dx10Header = true;
-  }
-
-  this->width = std::max(1U, header.dwWidth);
-  this->height = std::max(1U, header.dwHeight);
-  this->depth = std::max(1U, header.dwDepth);
-  this->slices = dx10Header ? std::max(1U, headerDXT10.arraySize) : 1;
-  this->mips = std::max(1U, header.dwMipMapCount);
-
-  uint32_t cubeFlags = DDSCAPS2_CUBEMAP | DDSCAPS2_CUBEMAP_ALLFACES;
-
-  if((header.dwCaps2 & cubeFlags) == cubeFlags && header.dwCaps & DDSCAPS_COMPLEX)
-    this->cubemap = true;
-
-  if(dx10Header && headerDXT10.miscFlag & DDS_RESOURCE_MISC_TEXTURECUBE)
-    this->cubemap = true;
-
-  if(this->cubemap)
-    this->slices *= 6;
-
-  bool bgrSwap = false;
-
-  if(dx10Header)
-  {
-    this->format = DXGIFormat2ResourceFormat(headerDXT10.dxgiFormat);
-    if(this->format.type == ResourceFormatType::Undefined)
-    {
-      log.warn("Unsupported DXGI_FORMAT: %u", (uint32_t)headerDXT10.dxgiFormat);
-      return false;
-    }
-  }
-  else if(header.ddspf.dwFlags & DDPF_FOURCC)
-  {
-    switch(header.ddspf.dwFourCC)
-    {
-      case MAKE_FOURCC('D', 'X', 'T', '1'):
-        this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC1_UNORM);
-        break;
-      case MAKE_FOURCC('D', 'X', 'T', '2'):
-      case MAKE_FOURCC('D', 'X', 'T', '3'):
-        this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC2_UNORM);
-        break;
-      case MAKE_FOURCC('D', 'X', 'T', '4'):
-      case MAKE_FOURCC('D', 'X', 'T', '5'):
-        this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC3_UNORM);
-        break;
-      case MAKE_FOURCC('A', 'T', 'I', '1'):
-      case MAKE_FOURCC('B', 'C', '4', 'U'):
-        this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC4_UNORM);
-        break;
-      case MAKE_FOURCC('B', 'C', '4', 'S'):
-        this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC4_SNORM);
-        break;
-      case MAKE_FOURCC('A', 'T', 'I', '2'):
-      case MAKE_FOURCC('B', 'C', '5', 'U'):
-        this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC5_UNORM);
-        break;
-      case MAKE_FOURCC('B', 'C', '5', 'S'):
-        this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC5_SNORM);
-        break;
-      case MAKE_FOURCC('R', 'G', 'B', 'G'):
-        this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R8G8_B8G8_UNORM);
-        break;
-      case MAKE_FOURCC('G', 'R', 'G', 'B'):
-        this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_G8R8_G8B8_UNORM);
-        break;
-      case MAKE_FOURCC('U', 'Y', 'V', 'Y'):
-        bgrSwap = true;
-      case MAKE_FOURCC('Y', 'U', 'Y', '2'):
-        this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_YUY2);
-        break;
-      case 36: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R16G16B16A16_UNORM); break;
-      case 82: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_D32_FLOAT); break;
-      case 110: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R16G16B16A16_SNORM); break;
-      case 111: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R16_FLOAT); break;
-      case 112: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R16G16_FLOAT); break;
-      case 113: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R16G16B16A16_FLOAT); break;
-      case 114: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R32_FLOAT); break;
-      case 115: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R32G32_FLOAT); break;
-      case 116: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R32G32B32A32_FLOAT); break;
-      case 117: fprintf(stderr, "Legacy CxV8U8 format is unsupported"); return false;
-      default: log.warn("Unsupported FourCC: %", header.ddspf.dwFourCC); return false;
-    }
-  }
-  else
-  {
-    if(header.ddspf.dwRGBBitCount != 32 && header.ddspf.dwRGBBitCount != 24 &&
-       header.ddspf.dwRGBBitCount != 16 && header.ddspf.dwRGBBitCount != 8)
-    {
-      log.warn("Unsupported RGB bit count: %u", header.ddspf.dwRGBBitCount);
-      return false;
+    uint32_t magic = 0;
+    serialize(magic);
+    if (magic != dds_fourcc) {
+        log.error("Not a dds file");
+        return false;
     }
 
-    this->format.compByteWidth = 1;
-    this->format.compCount = uint8_t(header.ddspf.dwRGBBitCount / 8);
-    this->format.compType = CompType::UNorm;
-    this->format.type = ResourceFormatType::Regular;
+    DDS_HEADER header = {};
+    serialize(header);
 
-    if(header.ddspf.dwBBitMask < header.ddspf.dwRBitMask)
-      this->format.SetBGRAOrder(true);
-  }
+    bool dx10Header = false;
+    DDS_HEADER_DXT10 headerDXT10 = {};
 
-  uint32_t bytesPerPixel = 1;
-  int subsamplePacking = 1;
-  switch(this->format.type)
-  {
+    if(header.ddspf.dwFlags == DDPF_FOURCC && header.ddspf.dwFourCC == MAKE_FOURCC('D', 'X', '1', '0')) {
+        serialize(headerDXT10);
+        dx10Header = true;
+    }
+
+    this->width = std::max(1U, header.dwWidth);
+    this->height = std::max(1U, header.dwHeight);
+    this->depth = std::max(1U, header.dwDepth);
+    this->slices = dx10Header ? std::max(1U, headerDXT10.arraySize) : 1;
+    this->mips = std::max(1U, header.dwMipMapCount);
+
+    uint32_t cubeFlags = DDSCAPS2_CUBEMAP | DDSCAPS2_CUBEMAP_ALLFACES;
+
+    if((header.dwCaps2 & cubeFlags) == cubeFlags && header.dwCaps & DDSCAPS_COMPLEX)
+        this->cubemap = true;
+
+    if(dx10Header && headerDXT10.miscFlag & DDS_RESOURCE_MISC_TEXTURECUBE)
+        this->cubemap = true;
+
+    if(this->cubemap)
+        this->slices *= 6;
+
+    bool bgrSwap = false;
+
+    if(dx10Header) {
+        this->format = DXGIFormat2ResourceFormat(headerDXT10.dxgiFormat);
+        if(this->format.type == ResourceFormatType::Undefined) {
+            log.warn("Unsupported DXGI_FORMAT: %u", (uint32_t)headerDXT10.dxgiFormat);
+            return false;
+        }
+    } else if(header.ddspf.dwFlags & DDPF_FOURCC) {
+        switch(header.ddspf.dwFourCC) {
+        case MAKE_FOURCC('D', 'X', 'T', '1'):
+            this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC1_UNORM);
+            break;
+        case MAKE_FOURCC('D', 'X', 'T', '2'):
+        case MAKE_FOURCC('D', 'X', 'T', '3'):
+            this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC2_UNORM);
+            break;
+        case MAKE_FOURCC('D', 'X', 'T', '4'):
+        case MAKE_FOURCC('D', 'X', 'T', '5'):
+            this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC3_UNORM);
+            break;
+        case MAKE_FOURCC('A', 'T', 'I', '1'):
+        case MAKE_FOURCC('B', 'C', '4', 'U'):
+            this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC4_UNORM);
+            break;
+        case MAKE_FOURCC('B', 'C', '4', 'S'):
+            this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC4_SNORM);
+            break;
+        case MAKE_FOURCC('A', 'T', 'I', '2'):
+        case MAKE_FOURCC('B', 'C', '5', 'U'):
+            this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC5_UNORM);
+            break;
+        case MAKE_FOURCC('B', 'C', '5', 'S'):
+            this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_BC5_SNORM);
+            break;
+        case MAKE_FOURCC('R', 'G', 'B', 'G'):
+            this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R8G8_B8G8_UNORM);
+            break;
+        case MAKE_FOURCC('G', 'R', 'G', 'B'):
+            this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_G8R8_G8B8_UNORM);
+            break;
+        case MAKE_FOURCC('U', 'Y', 'V', 'Y'):
+            bgrSwap = true;
+        case MAKE_FOURCC('Y', 'U', 'Y', '2'):
+            this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_YUY2);
+            break;
+        case 36: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R16G16B16A16_UNORM); break;
+        case 82: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_D32_FLOAT); break;
+        case 110: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R16G16B16A16_SNORM); break;
+        case 111: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R16_FLOAT); break;
+        case 112: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R16G16_FLOAT); break;
+        case 113: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R16G16B16A16_FLOAT); break;
+        case 114: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R32_FLOAT); break;
+        case 115: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R32G32_FLOAT); break;
+        case 116: this->format = DXGIFormat2ResourceFormat(DXGI_FORMAT_R32G32B32A32_FLOAT); break;
+        case 117: fprintf(stderr, "Legacy CxV8U8 format is unsupported"); return false;
+        default: log.warn("Unsupported FourCC: %", header.ddspf.dwFourCC); return false;
+        }
+    }
+    else
+    {
+        if(header.ddspf.dwRGBBitCount != 32 && header.ddspf.dwRGBBitCount != 24 &&
+                header.ddspf.dwRGBBitCount != 16 && header.ddspf.dwRGBBitCount != 8)
+        {
+            log.warn("Unsupported RGB bit count: %u", header.ddspf.dwRGBBitCount);
+            return false;
+        }
+
+        this->format.compByteWidth = 1;
+        this->format.compCount = uint8_t(header.ddspf.dwRGBBitCount / 8);
+        this->format.compType = CompType::UNorm;
+        this->format.type = ResourceFormatType::Regular;
+
+        if(header.ddspf.dwBBitMask < header.ddspf.dwRBitMask)
+            this->format.SetBGRAOrder(true);
+    }
+
+    uint32_t bytesPerPixel = 1;
+    int subsamplePacking = 1;
+    switch(this->format.type)
+    {
     case ResourceFormatType::S8:
     case ResourceFormatType::A8: bytesPerPixel = 1; break;
     case ResourceFormatType::R10G10B10A2:
@@ -1046,111 +1047,98 @@ bool DdsFile::load_dds_from_file(FILE *f)
     case ResourceFormatType::R4G4B4A4: bytesPerPixel = 2; break;
     case ResourceFormatType::D32S8: bytesPerPixel = 8; break;
     case ResourceFormatType::YUV8:
-      if(this->format.YUVPlaneCount() == 1 && this->format.YUVSubsampling() == 422)
-      {
-        subsamplePacking = 2;
-        bytesPerPixel = 2;
-        break;
-      }
-      [[fallthrough]];
+        if(this->format.YUVPlaneCount() == 1 && this->format.YUVSubsampling() == 422) {
+            subsamplePacking = 2;
+            bytesPerPixel = 2;
+            break;
+        }
+        [[fallthrough]];
     case ResourceFormatType::YUV10:
     case ResourceFormatType::YUV12:
     case ResourceFormatType::YUV16:
     case ResourceFormatType::D16S8:
     case ResourceFormatType::R4G4:
-      log.error("Unsupported file format %", this->format.type);
-      return false;
-    default: bytesPerPixel = this->format.compCount * this->format.compByteWidth;
-  }
-
-  bool blockFormat = false;
-
-  if(this->format.Special())
-  {
-    switch(this->format.type)
-    {
-      case ResourceFormatType::BC1:
-      case ResourceFormatType::BC2:
-      case ResourceFormatType::BC3:
-      case ResourceFormatType::BC4:
-      case ResourceFormatType::BC5:
-      case ResourceFormatType::BC6:
-      case ResourceFormatType::BC7: blockFormat = true; break;
-      case ResourceFormatType::ETC2:
-      case ResourceFormatType::EAC:
-      case ResourceFormatType::ASTC:
-        log.error("Unsupported file format, %", this->format.type);
+        log.error("Unsupported file format %", this->format.type);
         return false;
-      default: break;
+    default: bytesPerPixel = this->format.compCount * this->format.compByteWidth;
     }
-  }
 
-  this->subsizes = new uint32_t[this->slices * this->mips];
-  this->subdata = new uint8_t *[this->slices * this->mips];
+    bool blockFormat = false;
 
-  int i = 0;
-  for(int slice = 0; slice < this->slices; slice++)
-  {
-    for(int mip = 0; mip < this->mips; mip++)
-    {
-      int rowlen = std::max(1, this->width >> mip);
-      rowlen = AlignUp(rowlen, subsamplePacking);
-      int numRows = std::max(1, this->height >> mip);
-      int numdepths = std::max(1, this->depth >> mip);
-      int pitch = std::max(1U, rowlen * bytesPerPixel);
-
-      // pitch/rows are in blocks, not pixels, for block formats.
-      if(blockFormat)
-      {
-        numRows = std::max(1, numRows / 4);
-
-        int blockSize = (this->format.type == ResourceFormatType::BC1 ||
-                         this->format.type == ResourceFormatType::BC4)
-                            ? 8
-                            : 16;
-
-        pitch = std::max(blockSize, (((rowlen + 3) / 4)) * blockSize);
-      }
-
-      this->subsizes[i] = numdepths * numRows * pitch;
-
-      uint8_t *bytedata = this->subdata[i] = new uint8_t[this->subsizes[i]];
-
-      for(int d = 0; d < numdepths; d++)
-      {
-        for(int row = 0; row < numRows; row++)
+    if(this->format.Special()) {
+        switch(this->format.type)
         {
-          fread(bytedata, 1, pitch, f);
-
-          if(bgrSwap)
-          {
-            uint8_t *rgba = bytedata;
-
-            if(bytesPerPixel >= 3)
-            {
-              for(int p = 0; p < rowlen; p++)
-              {
-                std::swap(rgba[0], rgba[2]);
-                rgba += bytesPerPixel;
-              }
-            }
-            else
-            {
-              for(int p = 0; p < rowlen; p++)
-              {
-                std::swap(rgba[0], rgba[1]);
-                rgba += bytesPerPixel;
-              }
-            }
-          }
-
-          bytedata += pitch;
+        case ResourceFormatType::BC1:
+        case ResourceFormatType::BC2:
+        case ResourceFormatType::BC3:
+        case ResourceFormatType::BC4:
+        case ResourceFormatType::BC5:
+        case ResourceFormatType::BC6:
+        case ResourceFormatType::BC7: blockFormat = true; break;
+        case ResourceFormatType::ETC2:
+        case ResourceFormatType::EAC:
+        case ResourceFormatType::ASTC:
+            log.error("Unsupported file format, %", this->format.type);
+            return false;
+        default: break;
         }
-      }
-
-      i++;
     }
-  }
 
-  return true;
+    this->subsizes = new uint32_t[this->slices * this->mips];
+    this->subdata = new char *[this->slices * this->mips];
+
+    int i = 0;
+    for(int slice = 0; slice < this->slices; slice++) {
+        for(int mip = 0; mip < this->mips; mip++) {
+            int rowlen = std::max(1, this->width >> mip);
+            rowlen = AlignUp(rowlen, subsamplePacking);
+            int numRows = std::max(1, this->height >> mip);
+            int numdepths = std::max(1, this->depth >> mip);
+            int pitch = std::max(1U, rowlen * bytesPerPixel);
+
+            // pitch/rows are in blocks, not pixels, for block formats.
+            if(blockFormat) {
+                numRows = std::max(1, numRows / 4);
+
+                int blockSize = (this->format.type == ResourceFormatType::BC1 ||
+                                 this->format.type == ResourceFormatType::BC4)
+                        ? 8
+                        : 16;
+
+                pitch = std::max(blockSize, (((rowlen + 3) / 4)) * blockSize);
+            }
+
+            this->subsizes[i] = numdepths * numRows * pitch;
+
+            char *bytedata = this->subdata[i] = new char[this->subsizes[i]];
+
+            for(int d = 0; d < numdepths; d++) {
+                for(int row = 0; row < numRows; row++) {
+                    getIStream()->read(bytedata, pitch);
+
+                    if(bgrSwap) {
+                        char *rgba = bytedata;
+
+                        if(bytesPerPixel >= 3) {
+                            for(int p = 0; p < rowlen; p++) {
+                                std::swap(rgba[0], rgba[2]);
+                                rgba += bytesPerPixel;
+                            }
+                        } else {
+                            for(int p = 0; p < rowlen; p++) {
+                                std::swap(rgba[0], rgba[1]);
+                                rgba += bytesPerPixel;
+                            }
+                        }
+                    }
+
+                    bytedata += pitch;
+                }
+            }
+
+            i++;
+        }
+    }
+
+    return true;
 }

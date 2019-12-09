@@ -89,39 +89,33 @@ struct ResourceFormat
     ResourceFormat(const ResourceFormat &) = default;
     ResourceFormat &operator=(const ResourceFormat &) = default;
 
-    bool operator==(const ResourceFormat &r) const
-    {
-        return type == r.type && compCount == r.compCount && compByteWidth == r.compByteWidth &&
-                compType == r.compType && flags == r.flags;
-    }
-    bool operator<(const ResourceFormat &r) const
-    {
-        if(type != r.type)
-            return type < r.type;
-        if(compCount != r.compCount)
-            return compCount < r.compCount;
-        if(compByteWidth != r.compByteWidth)
-            return compByteWidth < r.compByteWidth;
-        if(compType != r.compType)
-            return compType < r.compType;
-        if(flags != r.flags)
-            return flags < r.flags;
-        return false;
-    }
+//    bool operator==(const ResourceFormat &r) const
+//    {
+//        return type == r.type && compCount == r.compCount && compByteWidth == r.compByteWidth &&
+//                compType == r.compType && flags == r.flags;
+//    }
+//    bool operator<(const ResourceFormat &r) const
+//    {
+//        if(type != r.type)
+//            return type < r.type;
+//        if(compCount != r.compCount)
+//            return compCount < r.compCount;
+//        if(compByteWidth != r.compByteWidth)
+//            return compByteWidth < r.compByteWidth;
+//        if(compType != r.compType)
+//            return compType < r.compType;
+//        if(flags != r.flags)
+//            return flags < r.flags;
+//        return false;
+//    }
 
-    bool operator!=(const ResourceFormat &r) const { return !(*this == r); }
-    //  rdcstr Name() const
-    //  {
-    //    rdcstr ret;
-    //    RENDERDOC_ResourceFormatName(*this, ret);
-    //    return ret;
-    //  }
+//    bool operator!=(const ResourceFormat &r) const { return !(*this == r); }
 
     bool Special() const { return type != ResourceFormatType::Regular; }
     bool BGRAOrder() const { return (flags & ResourceFormat_BGRA) != 0; }
     bool SRGBCorrected() const { return compType == CompType::UNormSRGB; }
-    uint32_t YUVSubsampling() const
-    {
+
+    uint32_t YUVSubsampling() const {
         if(flags & ResourceFormat_444)
             return 444;
         else if(flags & ResourceFormat_422)
@@ -140,16 +134,14 @@ struct ResourceFormat
         return 1;
     }
 
-    void SetBGRAOrder(bool flag)
-    {
+    void SetBGRAOrder(bool flag) {
         if(flag)
             flags |= ResourceFormat_BGRA;
         else
             flags &= ~ResourceFormat_BGRA;
     }
 
-    void SetYUVSubsampling(uint32_t subsampling)
-    {
+    void SetYUVSubsampling(uint32_t subsampling) {
         flags &= ~ResourceFormat_SubSample_Mask;
         if(subsampling == 444)
             flags |= ResourceFormat_444;
@@ -157,67 +149,6 @@ struct ResourceFormat
             flags |= ResourceFormat_422;
         else if(subsampling == 420)
             flags |= ResourceFormat_420;
-    }
-
-    void SetYUVPlaneCount(uint32_t planes)
-    {
-        flags &= ~ResourceFormat_Planes_Mask;
-        if(planes == 2)
-            flags |= ResourceFormat_2Planes;
-        else if(planes == 3)
-            flags |= ResourceFormat_3Planes;
-    }
-
-    uint32_t ElementSize() const
-    {
-        switch(type)
-        {
-        case ResourceFormatType::Undefined: break;
-        case ResourceFormatType::Regular: return compByteWidth * compCount;
-        case ResourceFormatType::BC1:
-        case ResourceFormatType::BC4:
-            return 8;    // 8 bytes for 4x4 block
-        case ResourceFormatType::BC2:
-        case ResourceFormatType::BC3:
-        case ResourceFormatType::BC5:
-        case ResourceFormatType::BC6:
-        case ResourceFormatType::BC7:
-            return 16;    // 16 bytes for 4x4 block
-        case ResourceFormatType::ETC2: return 8;
-        case ResourceFormatType::EAC:
-            if(compCount == 1)
-                return 8;    // single channel R11 EAC
-            else if(compCount == 2)
-                return 16;    // two channel RG11 EAC
-            else
-                return 16;    // RGBA8 EAC
-        case ResourceFormatType::ASTC:
-            return 16;    // ASTC is always 128 bits per block
-        case ResourceFormatType::R10G10B10A2:
-        case ResourceFormatType::R11G11B10:
-        case ResourceFormatType::R9G9B9E5: return 4;
-        case ResourceFormatType::R5G6B5:
-        case ResourceFormatType::R5G5B5A1:
-        case ResourceFormatType::R4G4B4A4: return 2;
-        case ResourceFormatType::R4G4: return 1;
-        case ResourceFormatType::D16S8:
-            return 3;    // we define the size as tightly packed, so 3 bytes.
-        case ResourceFormatType::D24S8: return 4;
-        case ResourceFormatType::D32S8:
-            return 5;    // we define the size as tightly packed, so 5 bytes.
-        case ResourceFormatType::S8:
-        case ResourceFormatType::A8:
-            return 1;
-            // can't give a sensible answer for YUV formats as the texel varies.
-        case ResourceFormatType::YUV8: return compCount;
-        case ResourceFormatType::YUV10:
-        case ResourceFormatType::YUV12:
-        case ResourceFormatType::YUV16: return compCount * 2;
-        case ResourceFormatType::PVRTC:
-            return 8;    // our representation can't differentiate 2bpp from 4bpp, so guess
-        }
-
-        return 0;
     }
 
     ResourceFormatType type;
@@ -247,7 +178,7 @@ private:
     friend void DoSerialise(SerialiserType &ser, ResourceFormat &el);
 };
 
-class DdsFile
+class DdsFile : public ISerializable
 {
 public:
     int width;
@@ -261,16 +192,17 @@ public:
 
     ResourceFormat format;
 
-    uint8_t **subdata;
+    char **subdata;
     uint32_t *subsizes;
 
-    ResourceFormat DXGIFormat2ResourceFormat(DXGI_FORMAT format);
-    bool is_dds_file(FILE *f);
-    bool load_dds_from_file(FILE *f);
-    bool write_dds_to_file(FILE *f);
+    bool load_dds_from_file();
+    bool write_dds_to_file();
 
+protected:
+    void serializeObject() override;
+
+private:
     static Logger &log;
-
 };
 
 } // namespace genie
